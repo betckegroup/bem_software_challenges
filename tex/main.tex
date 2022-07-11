@@ -264,7 +264,255 @@ Solve $\mathbf{V}\mathbf{c} = \mathbf{b}$
 \begin{frame}
 	\frametitle{The mixed C++/Python years}
 	
+	\begin{center}
+	\includegraphics[width=10cm]{../figs/cpp_python_mixed.png}
+	\end{center}
+	
+	Only performance critical logic remained in C++. Python/C++ communication
+	via Cython.
 \end{frame}
+	
+\begin{frame}
+	\frametitle{Why was I not happy with it?}
+	
+	\vspace{\baselineskip}
+	
+	\begin{itemize}
+	\item Fewer dependencies but still complicated build process and dependency hell.
+	\item Difficult for PhD students to do low-level code work on the C++ side.
+	\item Very tight object hierarchy on C++ code. Code not well written for modern vector registers
+	         (lots of arrays of structs instead of structs of arrays)
+	 \item Lots of attempts to shoehorn accelerator support into the code. But it was a mess.
+	 \item ...I am never happy with my codes.
+	 
+	 \begin{tcolorbox}What I wanted: All code in Python, high-performance, SIMD and Accelerator Support,
+	 shallow object structure, no dependency hell.
+	 \end{tcolorbox}
+	 
+	 \end{itemize}
+\end{frame}
+	
+\begin{frame}[fragile]{Can we do it in Python?}
+
+{\footnotesize
+\begin{lstlisting}[language=Python]
+
+def compute_operator_matrix():
+    """Python pseudo-code for BEM evaluation."""
+    A = numpy.zeros((n, n), dtype='float64')
+    for test_element in test_elements:
+        for trial_element in trial_elements:
+            if is_adjacent(test_element, trial_element):
+                local_interactions = \
+                    singular_integration(test_element, trial_element)
+            else:
+                local_interaction = \
+                    regular_integration(test_element, trial_element)
+            sum_into_global_matrix(
+                A, local_interaction)
+    return A
+\end{lstlisting}
+}
+\begin{tcolorbox}
+\begin{itemize}
+    \item How should we parallelise?
+    \item What about data structures and cache locality?
+    \item Is the interpreter not too slow to handle these loops?
+\end{itemize}
+\end{tcolorbox}
+	
+\end{frame}
+
+\begin{frame}{Acceleration technologies}
+
+\begin{minipage}{5cm}
+\begin{small}
+{\color{blue} Numba}
+\begin{itemize}
+    \item Grid topology computations
+    \item Python callables
+    \item Routines on grid functions, ($L^2$-norm, etc.)
+    \item Fallback for operators
+\end{itemize}
+\end{small}
+\end{minipage}
+\begin{minipage}{5cm}
+\begin{small}
+{\color{blue} OpenCL}
+\begin{itemize}
+    \item All potential evaluations
+    \item Mass matrices
+    \item FMM Near-Field
+\end{itemize}
+\end{small}
+\end{minipage}
+
+\vspace{\baselineskip}
+
+\begin{small}
+{\color{blue} Other technologies }
+\begin{itemize}
+    \item Scipy for spare matrix operations and iterative solvers
+    \item Numpy dense solvers
+\end{itemize}
+\end{small}
+
+\end{frame}
+
+\begin{frame}[fragile]{Numba acceleration}
+
+\begin{columns}[T]
+\begin{column}{.48\textwidth}
+\begin{center}
+\includegraphics[width=6cm]{../figs/grid_fun_discretise.png}
+\end{center}
+\end{column}%
+\hfill%
+\begin{column}{.48\textwidth}
+
+\vspace{1cm}
+
+\begin{itemize}
+    \item Numba just-in-time compiles Python functions to machine code (using LLVM).
+    \item Executable code independent of the Python interpreter.
+    \item Allows simple loop-based threading.
+    \item Most Python features and many Numpy features supported.
+\end{itemize}
+
+\end{column}%
+\end{columns}
+
+\end{frame}
+
+\begin{frame}{Evaluating the Green's fct. in Numba}
+
+\begin{columns}[T]
+\begin{column}{.48\textwidth}
+
+\vspace{3cm}
+
+\begin{center}
+\includegraphics[width=6cm]{../figs/laplace_kernel_numba.png}
+\end{center}
+\end{column}%
+\hfill%
+\begin{column}{.48\textwidth}
+
+\vspace{1cm}
+
+\begin{itemize}
+    \item Evaluate $g(x, y)=\frac{1}{4\pi |x - y|}$ for one $x$-value and many values for $y$.
+    \item Loops written so that the LLVM autovectorizer can produce AVX code.
+    \item Called on the element assembly for each test-quadrature point and evaluated for all trial quadrature points.
+    \item Kernels implemented for all the standard Green's functions and their derivatives for Laplace and Helmholtz.
+\end{itemize}
+
+\end{column}%
+\end{columns}
+
+    
+\end{frame}
+
+\begin{frame}[fragile]{Global assembly in Numba}
+
+{\footnotesize
+\begin{lstlisting}[language=Python]
+def global_assembly():
+    """Global assembly of operator"""
+    
+    A = empty_array()
+    
+    trial_points = get_all_trial_points()
+    for test_element in numba.prange(test_elements):
+        local_result = zero_array()
+        test_points = get_integration_points(test_element)
+        for test_point in test_points:
+            interactions = evaluate_kernel(test_point, trial_points)
+        for trial_element in trial_elements:
+            if is_adjacent(test_element, trial_element):
+                continue
+            sum_into_local_results(
+                interactions,
+                geometry_data,
+                test_fun_values,
+                trial_fun_values
+            )
+        sum_into_global_matrix(
+            A, test_element, local_results,
+            local2global_data
+        )
+\end{lstlisting}
+}
+
+\end{frame}
+
+\begin{frame}{Kernel based programming with OpenCL}
+\begin{minipage}{5cm}
+\begin{center}
+    \includegraphics[width=5cm]{../figs/opencl_overview.png}
+\end{center}
+\end{minipage}
+\begin{minipage}{5cm}
+\begin{small}
+\begin{itemize}
+\item Heterogeneous compute model
+\item MIMD/SIMD/SIMT support
+\item C99 based kernel language
+\item Current version 2.2
+\item OpenCL drivers by Intel, AMD, Nvidia plus open-source
+\end{itemize}
+\end{small}
+\end{minipage}
+\begin{minipage}{5cm}
+\begin{small}
+\begin{itemize}
+\item Each device consists of compute units (e.g. CPU cores) and processing elements (e.g. SIMD lanes)
+\item Work items arranged into work groups
+\item Memory synchronization only inside a workgroup
+\item Excellent Python support through PyOpenCL by Andreas Kloeckner
+\end{itemize}
+\end{small}
+\end{minipage}
+\begin{minipage}{5cm}
+\begin{center}
+    \includegraphics[width=5cm]{../figs/cl_workgroups.png}
+\end{center}
+\end{minipage}
+
+\end{frame}
+
+
+\begin{frame}[fragile]{Compute kernels for regular integrals}
+
+{\footnotesize
+\begin{lstlisting}[language=C]
+
+__kernel void kernel_function(...){
+
+  size_t testIndex = testIndices[gid[0]];
+  size_t trialIndex = trialIndices[gid[1]];
+
+  // Compute geometric data
+  
+  // Evaluate all integral contributions for test/trial pair
+  
+  // Sum into global matrix if test/trial pair not adjacent
+
+}
+
+\end{lstlisting}
+}
+\begin{tcolorbox}
+    \begin{itemize}
+        \item Compute kernels are JIT-compiled during Python execution by the OpenCL driver
+        \item On CPUs one test triangle coalesced with 4/8/16 trial triangles to efficiently target SIMD lanes.
+        \item A typical computation launches millions of kernels
+    \end{itemize}
+\end{tcolorbox}
+
+\end{frame}
+
+
 
 
 \begin{frame}
